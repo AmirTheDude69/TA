@@ -156,10 +156,7 @@ class JobWorker {
       });
 
       if (locked.telegram_chat_id) {
-        await sendJobFailedMessage(
-          locked.telegram_chat_id,
-          `Processing failed (${appError.code}): ${appError.message}\nPlease retry with another public link.`,
-        );
+        await sendJobFailedMessage(locked.telegram_chat_id, buildFailureMessage(appError));
       }
     } finally {
       await cleanupTempPaths(cleanupTargets);
@@ -176,6 +173,20 @@ function mapToAppError(error: unknown): AppError {
 
 function topDestinations(detections: DestinationDetection[]): string[] {
   return detections.slice(0, 6).map((item) => item.destination);
+}
+
+function buildFailureMessage(appError: AppError): string {
+  const base = `Processing failed (${appError.code}): ${appError.message}`;
+
+  if (appError.code === 'INVALID_URL' || appError.code === 'UNSUPPORTED_PLATFORM' || appError.code === 'DOWNLOAD_FAILED') {
+    return `${base}\nPlease retry with another public link.`;
+  }
+
+  if (appError.code === 'VISION_FAILED' && /quota|429|rate limit|billing/i.test(appError.message)) {
+    return `${base}\nVision API quota is currently exhausted. Please try again later.`;
+  }
+
+  return `${base}\nPlease retry shortly.`;
 }
 
 export const jobWorker = new JobWorker();

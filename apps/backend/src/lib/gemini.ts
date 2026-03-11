@@ -29,15 +29,37 @@ type GeminiPart =
     };
 
 const GEMINI_MAX_RETRIES = 3;
-const GEMINI_VISION_MAX_FRAMES = 18;
+const GEMINI_VISION_MAX_FRAMES = 6;
 const GEMINI_VISION_BATCH_SIZE = 6;
+const GEMINI_RETRY_DELAY_MS = 1500;
+let geminiQuotaCooldownUntil = 0;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function detectQuotaExceeded(errorBody: string, status: number): boolean {
+  if (status !== 429) {
+    return false;
+  }
+  const normalized = errorBody.toLowerCase();
+  return normalized.includes('quota') || normalized.includes('billing') || normalized.includes('exceeded your current quota');
+}
+
+function formatQuotaRetryTime(unixMs: number): string {
+  const minutes = Math.max(1, Math.ceil((unixMs - Date.now()) / 60000));
+  return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+}
+
 async function generateContent(model: string, parts: GeminiPart[]): Promise<string> {
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`;
+  if (Date.now() < geminiQuotaCooldownUntil) {
+    throw new AppError(
+      'VISION_FAILED',
+      `Gemini quota is temporarily exhausted. Retry in about ${formatQuotaRetryTime(geminiQuotaCooldownUntil)}.`,
+    );
+  }
+
   for (let attempt = 1; attempt <= GEMINI_MAX_RETRIES; attempt += 1) {
     const response = await fetch(endpoint, {
       method: 'POST',
@@ -60,9 +82,14 @@ async function generateContent(model: string, parts: GeminiPart[]): Promise<stri
 
     if (!response.ok) {
       const errorBody = await response.text();
-      const retryable = response.status === 429 || response.status >= 500;
+      const quotaExceeded = detectQuotaExceeded(errorBody, response.status);
+      if (quotaExceeded) {
+        geminiQuotaCooldownUntil = Date.now() + env.GEMINI_QUOTA_COOLDOWN_MS;
+      }
+
+      const retryable = !quotaExceeded && (response.status === 429 || response.status >= 500);
       if (retryable && attempt < GEMINI_MAX_RETRIES) {
-        await sleep(attempt * 1500);
+        await sleep(attempt * GEMINI_RETRY_DELAY_MS);
         continue;
       }
       const compactBody = errorBody.slice(0, 180).replace(/\s+/g, ' ').trim();

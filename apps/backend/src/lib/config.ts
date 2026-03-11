@@ -17,8 +17,9 @@ const ConfigSchema = z.object({
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
   QUEUE_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(4000),
   VISION_FRAME_RATE: z.coerce.number().positive().default(1),
-  VISION_MAX_FRAMES: z.coerce.number().int().positive().default(45),
+  VISION_MAX_FRAMES: z.coerce.number().int().positive().default(12),
   VISION_MIN_CONFIDENCE: z.coerce.number().min(0).max(1).default(0.55),
+  GEMINI_QUOTA_COOLDOWN_MS: z.coerce.number().int().positive().default(600000),
 });
 
 const parsed = ConfigSchema.safeParse(process.env);
