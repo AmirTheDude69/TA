@@ -28,42 +28,62 @@ type GeminiPart =
       };
     };
 
+const GEMINI_MAX_RETRIES = 3;
+const GEMINI_VISION_MAX_FRAMES = 18;
+const GEMINI_VISION_BATCH_SIZE = 6;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function generateContent(model: string, parts: GeminiPart[]): Promise<string> {
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`;
-
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      contents: [
-        {
-          role: 'user',
-          parts,
-        },
-      ],
-      generationConfig: {
-        temperature: 0.2,
-        responseMimeType: 'application/json',
+  for (let attempt = 1; attempt <= GEMINI_MAX_RETRIES; attempt += 1) {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
       },
-    }),
-  });
+      body: JSON.stringify({
+        contents: [
+          {
+            role: 'user',
+            parts,
+          },
+        ],
+        generationConfig: {
+          temperature: 0.2,
+          responseMimeType: 'application/json',
+        },
+      }),
+    });
 
-  if (!response.ok) {
-    throw new AppError('VISION_FAILED', `Gemini request failed: ${response.status} ${response.statusText}`);
+    if (!response.ok) {
+      const errorBody = await response.text();
+      const retryable = response.status === 429 || response.status >= 500;
+      if (retryable && attempt < GEMINI_MAX_RETRIES) {
+        await sleep(attempt * 1500);
+        continue;
+      }
+      const compactBody = errorBody.slice(0, 180).replace(/\s+/g, ' ').trim();
+      throw new AppError(
+        'VISION_FAILED',
+        `Gemini request failed: ${response.status} ${response.statusText}${compactBody ? ` - ${compactBody}` : ''}`,
+      );
+    }
+
+    const data = (await response.json()) as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    };
+
+    const text = data.candidates?.[0]?.content?.parts?.map((part) => part.text ?? '').join('')?.trim();
+    if (!text) {
+      throw new AppError('VISION_FAILED', 'Gemini returned an empty response.');
+    }
+    return text;
   }
 
-  const data = (await response.json()) as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-  };
-
-  const text = data.candidates?.[0]?.content?.parts?.map((part) => part.text ?? '').join('')?.trim();
-  if (!text) {
-    throw new AppError('VISION_FAILED', 'Gemini returned an empty response.');
-  }
-
-  return text;
+  throw new AppError('VISION_FAILED', 'Gemini request failed after retries.');
 }
 
 function extractJsonObject(raw: string): string {
@@ -110,11 +130,29 @@ function chunk<T>(items: T[], size: number): T[][] {
   return chunks;
 }
 
+function sampleFrames<T>(frames: T[], maxFrames: number): T[] {
+  if (frames.length <= maxFrames) {
+    return frames;
+  }
+  if (maxFrames <= 1) {
+    return [frames[0]];
+  }
+
+  const sampled: T[] = [];
+  for (let index = 0; index < maxFrames; index += 1) {
+    const ratio = index / (maxFrames - 1);
+    const sourceIndex = Math.round(ratio * (frames.length - 1));
+    sampled.push(frames[sourceIndex]);
+  }
+  return sampled;
+}
+
 export async function detectDestinationsFromFrames(
   framesBase64: string[],
   minConfidence: number,
 ): Promise<DestinationDetection[]> {
-  const batches = chunk(framesBase64, 8);
+  const sampledFrames = sampleFrames(framesBase64, GEMINI_VISION_MAX_FRAMES);
+  const batches = chunk(sampledFrames, GEMINI_VISION_BATCH_SIZE);
   const collected: DestinationDetection[] = [];
 
   for (let index = 0; index < batches.length; index += 1) {
