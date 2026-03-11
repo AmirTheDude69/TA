@@ -1,0 +1,13 @@
+node_modules
+.npm
+.env
+.env.*
+!.env.example
+.next
+dist
+coverage
+*.log
+.DS_Store
+apps/backend/tmp
+apps/backend/.turbo
+apps/dashboard/.turbo
