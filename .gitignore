@@ -11,3 +11,5 @@ coverage
 apps/backend/tmp
 apps/backend/.turbo
 apps/dashboard/.turbo
+
+*.tsbuildinfo
