@@ -12,6 +12,8 @@ const ConfigSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1),
   TELEGRAM_WEBHOOK_SECRET: z.string().min(1),
   GEMINI_API_KEY: z.string().min(1),
+  YTDLP_COOKIES_B64: z.string().optional(),
+  INSTAGRAM_COOKIES_B64: z.string().optional(),
   SUPABASE_URL: z.string().url(),
   SUPABASE_ANON_KEY: z.string().min(1),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),

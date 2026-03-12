@@ -97,7 +97,7 @@ class JobWorker {
         await sendJobStartedMessage(locked.telegram_chat_id);
       }
 
-      const { tempDir, videoPath } = await downloadVideoToTemp(locked.cleaned_url ?? locked.raw_url);
+      const { tempDir, videoPath } = await downloadVideoToTemp(locked.cleaned_url ?? locked.raw_url, locked.platform);
       cleanupTargets.push(tempDir);
 
       const { framePaths, framesDir } = await extractFrames(
@@ -177,6 +177,10 @@ function topDestinations(detections: DestinationDetection[]): string[] {
 
 function buildFailureMessage(appError: AppError): string {
   const base = `Processing failed (${appError.code}): ${appError.message}`;
+
+  if (appError.code === 'DOWNLOAD_FAILED' && /instagram|cookies|login required|authentication/i.test(appError.message)) {
+    return `${base}\nInstagram may require authenticated cookies in backend settings. Please ask admin to configure it and retry.`;
+  }
 
   if (appError.code === 'INVALID_URL' || appError.code === 'UNSUPPORTED_PLATFORM' || appError.code === 'DOWNLOAD_FAILED') {
     return `${base}\nPlease retry with another public link.`;

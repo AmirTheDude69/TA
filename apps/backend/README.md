@@ -22,3 +22,4 @@ npm run dev -w apps/backend
 
 - Requires `yt-dlp` and `ffmpeg` available in PATH.
 - Worker polls queued jobs and processes them asynchronously.
+- Optional: set `INSTAGRAM_COOKIES_B64` (base64 Netscape cookie file) for Instagram reels that require login.
