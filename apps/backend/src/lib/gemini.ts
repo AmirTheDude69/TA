@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { GoogleAuth } from 'google-auth-library';
 import {
   DestinationDetectionSchema,
   ItineraryDetailsSchema,
@@ -8,14 +9,20 @@ import {
 import { env } from './config.js';
 import { AppError, toErrorMessage } from './errors.js';
 
-const GEMINI_VISION_MODEL = 'gemini-2.0-flash';
-const GEMINI_TEXT_MODEL = 'gemini-2.0-flash';
+const GEMINI_VISION_MODEL = env.VERTEX_MODEL;
+const GEMINI_TEXT_MODEL = env.VERTEX_MODEL;
 
 const DetectionResponseSchema = z.object({
   detections: z.array(DestinationDetectionSchema).default([]),
 });
 
 const ItineraryResponseSchema = ItineraryDetailsSchema;
+const VertexServiceAccountSchema = z.object({
+  type: z.literal('service_account').optional(),
+  project_id: z.string().min(1).optional(),
+  client_email: z.string().email(),
+  private_key: z.string().min(1),
+});
 
 type GeminiPart =
   | {
@@ -33,6 +40,41 @@ const GEMINI_VISION_MAX_FRAMES = 6;
 const GEMINI_VISION_BATCH_SIZE = 6;
 const GEMINI_RETRY_DELAY_MS = 1500;
 let geminiQuotaCooldownUntil = 0;
+const OAUTH_SCOPE = 'https://www.googleapis.com/auth/cloud-platform';
+
+function decodeCredentials(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('{')) {
+    return trimmed;
+  }
+  return Buffer.from(trimmed, 'base64').toString('utf8');
+}
+
+function parseVertexCredentials(raw: string): z.infer<typeof VertexServiceAccountSchema> {
+  const decoded = decodeCredentials(raw);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(decoded);
+  } catch {
+    throw new AppError('VISION_FAILED', 'Invalid Vertex service account credentials JSON.');
+  }
+
+  const credentials = VertexServiceAccountSchema.safeParse(parsed);
+  if (!credentials.success) {
+    throw new AppError('VISION_FAILED', 'Vertex credentials are missing required fields.');
+  }
+
+  return credentials.data;
+}
+
+const vertexCredentials = parseVertexCredentials(env.VERTEX_SERVICE_ACCOUNT_JSON_B64);
+const vertexAuth = new GoogleAuth({
+  credentials: {
+    client_email: vertexCredentials.client_email,
+    private_key: vertexCredentials.private_key.replace(/\\n/g, '\n'),
+  },
+  scopes: [OAUTH_SCOPE],
+});
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -52,7 +94,7 @@ function formatQuotaRetryTime(unixMs: number): string {
 }
 
 async function generateContent(model: string, parts: GeminiPart[]): Promise<string> {
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`;
+  const endpoint = `https://${env.VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/${env.VERTEX_PROJECT_ID}/locations/${env.VERTEX_LOCATION}/publishers/google/models/${model}:generateContent`;
   if (Date.now() < geminiQuotaCooldownUntil) {
     throw new AppError(
       'VISION_FAILED',
@@ -61,10 +103,16 @@ async function generateContent(model: string, parts: GeminiPart[]): Promise<stri
   }
 
   for (let attempt = 1; attempt <= GEMINI_MAX_RETRIES; attempt += 1) {
+    const accessToken = await vertexAuth.getAccessToken();
+    if (!accessToken) {
+      throw new AppError('VISION_FAILED', 'Could not acquire Vertex access token.');
+    }
+
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
+        authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify({
         contents: [
@@ -95,7 +143,7 @@ async function generateContent(model: string, parts: GeminiPart[]): Promise<stri
       const compactBody = errorBody.slice(0, 180).replace(/\s+/g, ' ').trim();
       throw new AppError(
         'VISION_FAILED',
-        `Gemini request failed: ${response.status} ${response.statusText}${compactBody ? ` - ${compactBody}` : ''}`,
+        `Vertex Gemini request failed: ${response.status} ${response.statusText}${compactBody ? ` - ${compactBody}` : ''}`,
       );
     }
 
